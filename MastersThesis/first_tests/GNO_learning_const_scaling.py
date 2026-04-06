@@ -3,7 +3,7 @@ import torch
 import matplotlib.pyplot as plt
 import sys
 import numpy as np
-from neuralop.models import FNO
+from neuralop.models import GNO
 from neuralop.training import Trainer
 from neuralop.training import AdamW
 from neuralop.utils import count_model_params
@@ -24,36 +24,27 @@ def main():
     N = 64
     x = torch.linspace(0, 1, N)
 
+
     def apply_operator(a):
-        A = torch.fft.fft(a)
-        k = torch.fft.fftfreq(len(a)) * len(a)
-        return torch.fft.ifft(1j * k * A).real
+        return 2*a
+
 
     from torch.utils.data import Dataset
-    def smooth_random_signal(N, cutoff=5):
-        A = torch.zeros(N, dtype=torch.complex64)
-        A[:cutoff] = torch.randn(cutoff) + 1j * torch.randn(cutoff)
-        a = torch.fft.ifft(A).real
-        return a / a.abs().max()  # normalize
-    
+
     class SimpleOperatorDataset(Dataset):
         def __init__(self, n_samples):
-            self.inputs = []
-            self.outputs = []
-
-            for _ in range(n_samples):
-                a = smooth_random_signal(N)
-                u = apply_operator(a)
-                self.inputs.append(a.unsqueeze(0))
-                self.outputs.append(u.unsqueeze(0))
+            self.n_samples = n_samples
 
         def __len__(self):
-            return len(self.inputs)
+            return self.n_samples
 
         def __getitem__(self, idx):
+            a = torch.randn(N)
+            u = apply_operator(a)
+
             return {
-                "x": self.inputs[idx],
-                "y": self.outputs[idx]
+                "x": a.unsqueeze(0),   # channel dimension
+                "y": u.unsqueeze(0)
             }
 
     from torch.utils.data import DataLoader
@@ -74,8 +65,7 @@ def main():
     # Creating the FNO model
     # ----------------------
 
-    model = FNO(
-        n_modes=(16,),
+    model = GNO(
         in_channels=1,
         out_channels=1,
         hidden_channels=32,

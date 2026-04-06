@@ -3,11 +3,12 @@ import torch
 import matplotlib.pyplot as plt
 import sys
 import numpy as np
-from neuralop.models import FNO
+from neuralop.models import GNO
 from neuralop.training import Trainer
 from neuralop.training import AdamW
 from neuralop.utils import count_model_params
 from neuralop.losses import LpLoss, H1Loss
+
 
 def main():
 
@@ -21,15 +22,29 @@ def main():
     # Loading the dataset
     # ------------------------------
 
-    N = 64
+    
+    N = 256
     x = torch.linspace(0, 1, N)
-
+    
     def apply_operator(a):
-        A = torch.fft.fft(a)
-        k = torch.fft.fftfreq(len(a)) * len(a)
-        return torch.fft.ifft(1j * k * A).real
+        N = len(a)
+        x = torch.linspace(0, 1, N)
+
+        # Parameters
+        sigma = 0.05
+        f = 20  # oscillation frequency
+
+        # Build kernel matrix
+        diff = x.unsqueeze(1) - x.unsqueeze(0)
+
+        K = torch.exp(-(diff**2) / sigma**2) * torch.cos(2 * torch.pi * f * diff)
+
+        # Apply integral operator
+        u = (K @ a) / N
+        return u
 
     from torch.utils.data import Dataset
+    
     def smooth_random_signal(N, cutoff=5):
         A = torch.zeros(N, dtype=torch.complex64)
         A[:cutoff] = torch.randn(cutoff) + 1j * torch.randn(cutoff)
@@ -74,11 +89,10 @@ def main():
     # Creating the FNO model
     # ----------------------
 
-    model = FNO(
-        n_modes=(16,),
+    model = GNO(
         in_channels=1,
         out_channels=1,
-        hidden_channels=32,
+        hidden_channels=64,
     )
     model = model.to(device)
 
@@ -143,7 +157,7 @@ def main():
     
     trainer = Trainer(
         model=model,
-        n_epochs=20,
+        n_epochs=25,
         device=device,
         data_processor=None,
         wandb_log=False,  # Disable Weights & Biases logging for this tutorial

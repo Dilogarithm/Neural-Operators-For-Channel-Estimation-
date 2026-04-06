@@ -3,7 +3,7 @@ import torch
 import matplotlib.pyplot as plt
 import sys
 import numpy as np
-from neuralop.models import GNO
+from gno import GNO
 from neuralop.training import Trainer
 from neuralop.training import AdamW
 from neuralop.utils import count_model_params
@@ -68,7 +68,7 @@ def main():
     model = GNO(
         in_channels=1,
         out_channels=1,
-        hidden_channels=32,
+        hidden_channels=64,
     )
     model = model.to(device)
 
