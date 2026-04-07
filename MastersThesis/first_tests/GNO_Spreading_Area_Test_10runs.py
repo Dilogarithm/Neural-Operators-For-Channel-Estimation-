@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 import sys
 import numpy as np
 
-from gno import GNO
+from neuralop.models import GNO
 from neuralop.training import Trainer
 from neuralop.training import AdamW
 from neuralop.utils import count_model_params
@@ -16,7 +16,6 @@ from torch.utils.data import Dataset, DataLoader
 # Channel generator
 # =========================
 def generate_channel(N, max_delay, max_doppler, K=3):
-    K = 3
     delays = torch.randint(0, max_delay, (K,))
     dopplers = torch.randint(-max_doppler, max_doppler, (K,))
     coeffs = torch.randn(K)
@@ -72,13 +71,13 @@ class SimpleOperatorDataset(Dataset):
 # =========================
 def run_experiment(max_delay, max_doppler):
 
-    N = 64
+    N = 256
     device = "cpu"
 
     H = generate_channel(N, max_delay, max_doppler)
 
-    train_dataset = SimpleOperatorDataset(2000, N, H)
-    test_dataset = SimpleOperatorDataset(1000, N, H)
+    train_dataset = SimpleOperatorDataset(800, N, H)
+    test_dataset = SimpleOperatorDataset(200, N, H)
 
     train_loader = DataLoader(train_dataset, batch_size=32)
     test_loader = DataLoader(test_dataset, batch_size=32)
@@ -87,7 +86,7 @@ def run_experiment(max_delay, max_doppler):
     model = GNO(
         in_channels=1,
         out_channels=1,
-        hidden_channels=32,
+        hidden_channels=20,
     ).to(device)
 
     # IMPORTANT: initialize dynamic weights
@@ -142,6 +141,16 @@ def main():
         (7, 7),
         (10, 10),
         (15, 15),
+        (17,17),
+        (20, 20),
+        (23, 23),
+        (24, 24),
+        (25, 25),
+        (26, 26),
+        (27, 27),
+        (28, 28),
+        (29, 29),
+        (30, 30),
     ]
 
     n_runs = 20
