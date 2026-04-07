@@ -66,7 +66,8 @@ class ContinuousSFTNO(nn.Module):
         self.K = K
         self.T = T
 
-        self.input_dim = NR * NT * K * 2
+        self.input_dim = 2 * NR * NT * K * 2
+        self.output_dim = NR * NT * K * 2
 
         # 🔹 Lift (embedding)
         self.lift = nn.Linear(self.input_dim, hidden_dim)
@@ -78,7 +79,7 @@ class ContinuousSFTNO(nn.Module):
         self.operator = SpatialOperator(hidden_dim, hidden_dim)
 
         # 🔹 Projection
-        self.proj = nn.Linear(hidden_dim, self.input_dim)
+        self.proj = nn.Linear(hidden_dim, self.output_dim)
 
     def forward(self, R):
         """
@@ -86,25 +87,30 @@ class ContinuousSFTNO(nn.Module):
         """
         B = R.shape[0]
 
-        # 🔹 Take last frame
-        R_last = R[:, -1]  # (B, NR, NT, K, 2)
+        # 🔹 Extract current and previous frames
+        R_current = R[:, -1]   # (B, NR, NT, K, 2)
+        R_prev    = R[:, -2]   # (B, NR, NT, K, 2)
 
         # 🔹 Flatten
-        R_flat = R_last.reshape(B, -1)
+        R_current_flat = R_current.reshape(B, -1)
+        R_prev_flat    = R_prev.reshape(B, -1)
+
+        # 🔹 Combine both (like SFT-CNN input)
+        x_input = torch.cat([R_current_flat, R_prev_flat], dim=-1)
 
         # 🔹 Lift
-        x = self.lift(R_flat)
+        x = self.lift(x_input)
 
-        # 🔹 Operator
+        # 🔹 Operator (residual block)
         x = self.operator(x)
 
-        # 🔹 Project
+        # 🔹 Project back
         out = self.proj(x)
 
-        # 🔥 Skip connection (CRITICAL)
-        out = out + R_flat
+        # 🔥 Residual connection (anchor on current frame)
+        out = out + R_current_flat
 
-        # 🔹 Reshape back
+        # 🔹 Reshape back to channel format
         H = out.view(B, self.NR, self.NT, self.K, 2)
 
         return H
