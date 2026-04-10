@@ -10,7 +10,7 @@ from neuralop.models import FNO
 # =========================
 
 class SFT_FNO(nn.Module):
-    def __init__(self, NR, NT, K, hidden_channels=32):
+    def __init__(self, NR, NT, K, hidden_channels=128):
         super().__init__()
 
         self.fno = FNO(
@@ -76,7 +76,7 @@ def generate_physical_channel(B, NR, NT, K, L=3):
     return H_real
 
 
-def generate_realistic_data(B, T, NR, NT, K, rho=0.9, noise_std=0.1):
+def generate_realistic_data(B, T, NR, NT, K, rho=1, noise_std=0):
     H_t = generate_physical_channel(B, NR, NT, K)
 
     R_list = []
@@ -186,22 +186,27 @@ def plot_angle_domain(H_true, H_pred, NR, NT):
 def main():
     B = 16
     T = 2
-    NR = 32
-    NT = 32
+    NR = 16
+    NT = 16
     K = 16
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     model = SFT_FNO(NR, NT, K).to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
     print("Training...\n")
 
-    for step in range(600):
+    for step in range(1000):
         R, H = generate_realistic_data(B, T, NR, NT, K)
 
         R = R.to(device)
         H = H.to(device)
+
+        scale = R.abs().mean() + 1e-6
+
+        R = R/scale
+        H = H/scale
 
         pred = model(R)
         loss = complex_mse(pred, H)
