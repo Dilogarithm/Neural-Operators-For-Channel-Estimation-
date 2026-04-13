@@ -14,7 +14,7 @@ class SFT_FNO(nn.Module):
         super().__init__()
 
         self.fno = FNO(
-            n_modes=(3, 3, 3),  # change later to (12,12,12)
+            n_modes=(3, 3, 3),
             hidden_channels=hidden_channels,
             in_channels=4,
             out_channels=2,
@@ -36,6 +36,71 @@ class SFT_FNO(nn.Module):
         H_c = R_current_c + self.alpha * correction
 
         return H_c.permute(0, 2, 3, 4, 1)
+
+
+# =========================
+# Beamforming + Measurement
+# =========================
+
+def dft_matrix(N):
+    n = torch.arange(N)
+    k = n.view(-1, 1)
+    W = torch.exp(-2j * math.pi * k * n / N)
+    return W / math.sqrt(N)
+
+
+def generate_beams(NT, NR, MT, MR):
+    F_full = dft_matrix(NT)
+    W_full = dft_matrix(NR)
+
+    F = F_full[:, :MT]
+    W = W_full[:, :MR]
+
+    return F, W
+
+
+def compute_GL_GR(F, W):
+    GL = torch.linalg.inv(W @ W.conj().T) @ W
+    GR = F.conj().T @ torch.linalg.inv(F @ F.conj().T)
+    return GL, GR
+
+
+def generate_measurement(H, F, W, noise_std):
+    B, NR, NT, K, _ = H.shape
+
+    H_complex = H[..., 0] + 1j * H[..., 1]
+
+    Y = []
+
+    for k in range(K):
+        Hk = H_complex[:, :, :, k]
+
+        Yk = W.conj().T @ Hk @ F
+
+        noise = noise_std * (
+            torch.randn_like(Yk) + 1j * torch.randn_like(Yk)
+        ) / math.sqrt(2)
+
+        Y.append(Yk + noise)
+
+    Y = torch.stack(Y, dim=-1)
+
+    return Y
+
+
+def compute_R(Y, GL, GR):
+    B, MR, MT, K = Y.shape
+
+    R = []
+
+    for k in range(K):
+        Yk = Y[:, :, :, k]
+        Rk = GL @ Yk @ GR
+        R.append(Rk)
+
+    R = torch.stack(R, dim=-1)
+
+    return torch.stack([R.real, R.imag], dim=-1)
 
 
 # =========================
@@ -73,7 +138,11 @@ def generate_physical_channel(B, NR, NT, K, L=3):
     return torch.stack([H.real, H.imag], dim=-1)
 
 
-def generate_data(B, T, NR, NT, K, rho, noise_std):
+# =========================
+# Data generation (UPDATED)
+# =========================
+
+def generate_data(B, T, NR, NT, K, rho, noise_std, F, W, GL, GR):
     H_t = generate_physical_channel(B, NR, NT, K)
 
     R_list = []
@@ -82,8 +151,8 @@ def generate_data(B, T, NR, NT, K, rho, noise_std):
         innovation = generate_physical_channel(B, NR, NT, K)
         H_t = rho * H_t + (1 - rho) * innovation
 
-        noise = noise_std * torch.randn_like(H_t)
-        R_t = H_t + noise
+        Y = generate_measurement(H_t, F, W, noise_std)
+        R_t = compute_R(Y, GL, GR)
 
         R_list.append(R_t)
 
@@ -108,13 +177,13 @@ def to_db(x):
 # Train
 # =========================
 
-def train_model(model, noise_std, NR, NT, K, rho, device, steps=200):
+def train_model(model, noise_std, NR, NT, K, rho, device, F, W, GL, GR, steps=200):
     optimizer = torch.optim.Adam(model.parameters(), lr=3e-4)
 
     model.train()
 
     for step in range(steps):
-        R, H = generate_data(16, 2, NR, NT, K, rho, noise_std)
+        R, H = generate_data(16, 2, NR, NT, K, rho, noise_std, F, W, GL, GR)
 
         R = R.to(device)
         H = H.to(device)
@@ -131,16 +200,16 @@ def train_model(model, noise_std, NR, NT, K, rho, device, steps=200):
         optimizer.step()
 
         if step % 100 == 0:
-            print(f"[SNR training] Step {step}, Loss: {loss.item():.6f}")
+            print(f"Step {step}, Loss: {loss.item():.6f}")
 
     return model
 
 
 # =========================
-# Evaluate (UPDATED)
+# Evaluate
 # =========================
 
-def evaluate_model(model, noise_std, NR, NT, K, rho, device):
+def evaluate_model(model, noise_std, NR, NT, K, rho, device, F, W, GL, GR):
     model.eval()
 
     nmse_model = 0
@@ -149,7 +218,7 @@ def evaluate_model(model, noise_std, NR, NT, K, rho, device):
 
     with torch.no_grad():
         for _ in range(100):
-            R, H = generate_data(1, 2, NR, NT, K, rho, noise_std)
+            R, H = generate_data(1, 2, NR, NT, K, rho, noise_std, F, W, GL, GR)
 
             R = R.to(device)
             H = H.to(device)
@@ -160,7 +229,6 @@ def evaluate_model(model, noise_std, NR, NT, K, rho, device):
 
             pred = model(R)
 
-            # baselines
             H_ls = R[:, -1]
             H_avg = 0.5 * (R[:, -1] + R[:, -2])
 
@@ -168,11 +236,7 @@ def evaluate_model(model, noise_std, NR, NT, K, rho, device):
             nmse_avg += nmse(H_avg, H).item()
             nmse_ls += nmse(H_ls, H).item()
 
-    return (
-        nmse_model / 100,
-        nmse_avg / 100,
-        nmse_ls / 100,
-    )
+    return nmse_model / 100, nmse_avg / 100, nmse_ls / 100
 
 
 # =========================
@@ -187,6 +251,18 @@ def main():
     K = 16
     rho = 0.9
 
+    MT = 6
+    MR = 6
+
+    # Beamforming setup
+    F, W = generate_beams(NT, NR, MT, MR)
+    GL, GR = compute_GL_GR(F, W)
+
+    F = F.to(device)
+    W = W.to(device)
+    GL = GL.to(device)
+    GR = GR.to(device)
+
     snr_db_list = [0, 5, 10, 15, 20, 25]
     noise_list = [10 ** (-snr / 20) for snr in snr_db_list]
 
@@ -199,10 +275,10 @@ def main():
 
         model = SFT_FNO().to(device)
 
-        model = train_model(model, noise_std, NR, NT, K, rho, device)
+        model = train_model(model, noise_std, NR, NT, K, rho, device, F, W, GL, GR)
 
         nmse_m, nmse_a, nmse_l = evaluate_model(
-            model, noise_std, NR, NT, K, rho, device
+            model, noise_std, NR, NT, K, rho, device, F, W, GL, GR
         )
 
         print(f"SFT-FNO NMSE: {nmse_m:.6f}")
@@ -213,12 +289,7 @@ def main():
         results_avg.append(to_db(nmse_a))
         results_ls.append(to_db(nmse_l))
 
-    # =========================
-    # Plot (dB scale)
-    # =========================
-
     plt.figure(figsize=(6,4))
-
     plt.plot(snr_db_list, results_model, 'o-', label="SFT-FNO")
     plt.plot(snr_db_list, results_avg, 's--', label="Averaging")
     plt.plot(snr_db_list, results_ls, 'x--', label="LS")
@@ -226,10 +297,8 @@ def main():
     plt.xlabel("SNR (dB)")
     plt.ylabel("NMSE (dB)")
     plt.title("NMSE vs SNR")
-
     plt.grid(True)
     plt.legend()
-
     plt.tight_layout()
     plt.show()
 
